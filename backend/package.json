@@ -13,7 +13,7 @@
   "license": "ISC",
   "description": "",
   "volta": {
-    "node": "20.0.0",
+    "node": "20.9.0",
     "npm": "10.0.0"
   },
   "devDependencies": {
