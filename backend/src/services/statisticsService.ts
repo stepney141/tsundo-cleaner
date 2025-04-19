@@ -75,8 +75,8 @@ export class StatisticsService {
         db,
         `SELECT 
            CASE
-             WHEN published_date REGEXP '^[0-9]{4}' THEN substr(published_date, 1, 4)
-             WHEN published_date REGEXP '[0-9]{4}$' THEN substr(published_date, -4)
+             WHEN substr(published_date, 1, 4) GLOB '[0-9][0-9][0-9][0-9]' THEN substr(published_date, 1, 4)
+             WHEN length(published_date) >= 4 AND substr(published_date, -4) GLOB '[0-9][0-9][0-9][0-9]' THEN substr(published_date, -4)
              ELSE 'Unknown'
            END as year,
            COUNT(*) as count
