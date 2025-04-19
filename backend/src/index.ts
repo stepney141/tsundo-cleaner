@@ -1,9 +1,10 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import apiRoutes from './routes/api';
+import { serverConfig, getServerUrl } from './config/server';
 
-// 環境変数の設定
-const PORT = process.env.PORT || 3001;
+// サーバー設定の取得
+const PORT = serverConfig.port;
 
 // Expressアプリケーションの初期化
 const app: Express = express();
@@ -38,5 +39,5 @@ app.get('/', (req, res) => {
 // サーバー起動
 app.listen(PORT, () => {
   console.log(`サーバーがポート ${PORT} で起動しました`);
-  console.log(`http://localhost:${PORT}/`);
+  console.log(`${getServerUrl()}/`);
 });

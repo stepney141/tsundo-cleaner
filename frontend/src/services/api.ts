@@ -1,11 +1,10 @@
 import axios from 'axios';
-
-// APIクライアントのベースURLを設定
-const API_BASE_URL = 'http://localhost:3001/api';
+import { apiConfig } from '../config/api';
 
 // Axiosインスタンスの作成
 const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: apiConfig.baseUrl,
+  timeout: apiConfig.timeout,
   headers: {
     'Content-Type': 'application/json',
   },

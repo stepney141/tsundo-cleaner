@@ -137,7 +137,8 @@ backend/
 ├── src/
 │   ├── index.ts            # エントリーポイント
 │   ├── config/             # 設定
-│   │   └── database.ts     # データベース接続設定
+│   │   ├── database.ts     # データベース接続設定
+│   │   └── server.ts       # サーバー設定
 │   ├── controllers/        # APIコントローラー
 │   │   ├── bookController.ts
 │   │   ├── similarityController.ts
@@ -220,3 +221,40 @@ backend/
 1. エンドツーエンドテスト
 2. パフォーマンス最適化
 3. UIデザイン調整
+
+## 環境設定
+
+### バックエンド環境変数
+バックエンドのサーバー設定は環境変数を通じて簡単に変更できます。
+
+```
+# .env ファイル (または環境変数)
+PORT=3001             # サーバーのポート番号
+HOST=localhost        # サーバーのホスト名
+```
+
+これらの設定は `backend/src/config/server.ts` で管理され、フォールバック値が設定されています。
+
+### フロントエンド環境変数
+フロントエンドのAPI接続設定は環境変数を通じて変更できます。
+
+```
+# .env ファイル
+VITE_API_BASE_URL=http://localhost:3001/api    # APIのベースURL
+VITE_API_TIMEOUT=10000                          # APIリクエストのタイムアウト (ms)
+```
+
+これらの設定は `frontend/src/config/api.ts` で管理され、フォールバック値が設定されています。
+
+### 設定の変更方法
+1. バックエンドのポート/ホスト変更
+   - `.env` ファイルを作成し、`PORT` や `HOST` を設定
+   - または、環境変数として直接設定
+
+2. フロントエンドのAPI接続先変更
+   - `.env` ファイルを作成し、`VITE_API_BASE_URL` を設定
+   - 本番環境や開発環境に応じて `.env.production` や `.env.development` を使い分け可能
+
+3. 設定ファイルの利用
+   - バックエンド: `serverConfig` オブジェクトから設定を取得
+   - フロントエンド: `apiConfig` オブジェクトから設定を取得
