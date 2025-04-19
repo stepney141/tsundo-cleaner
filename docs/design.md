@@ -41,6 +41,7 @@ Backend (Express + TypeScript)
 ├── API Routes
 ├── Controllers
 ├── Services
+│   ├── BookService
 │   ├── RecommendationService
 │   ├── SimilarityService
 │   └── StatisticsService
@@ -51,7 +52,29 @@ Backend (Express + TypeScript)
 ### データモデル
 
 ```typescript
-// 書籍データモデル
+/**
+ * データベース内の書籍データモデル（DB形式）
+ * データベースでは真偽値が'Yes'/'No'として格納される
+ */
+interface BookDB {
+  bookmeter_url: string;       // 読書メーターURL (プライマリキー)
+  isbn_or_asin: string;        // ISBN/ASIN
+  book_title: string;          // 書籍タイトル
+  author: string;              // 著者
+  publisher: string;           // 出版社
+  published_date: string;      // 出版日
+  exist_in_Sophia: string;     // 上智大学にあるか ('Yes'/'No')
+  exist_in_UTokyo: string;     // 東京大学にあるか ('Yes'/'No')
+  sophia_opac?: string;        // 上智OPACリンク
+  utokyo_opac?: string;        // 東大OPACリンク
+  sophia_mathlib_opac?: string; // 上智数学図書館OPACリンク
+  description?: string;        // 書籍の説明
+}
+
+/**
+ * アプリケーション内の書籍データモデル（アプリ形式）
+ * アプリケーション内では真偽値がbooleanとして扱われる
+ */
 interface Book {
   bookmeter_url: string;       // 読書メーターURL (プライマリキー)
   isbn_or_asin: string;        // ISBN/ASIN
@@ -66,16 +89,29 @@ interface Book {
   sophia_mathlib_opac?: string; // 上智数学図書館OPACリンク
   description?: string;        // 書籍の説明
 }
+
+/**
+ * 書籍タイプ
+ * wish: 読みたい本リスト
+ * stacked: 積読リスト
+ */
+type BookType = 'wish' | 'stacked';
 ```
 
 ## API設計
 
 | エンドポイント | メソッド | 説明 | パラメータ | レスポンス |
 |--------------|--------|------|-----------|----------|
+| /api/books | GET | 全ての書籍を取得 | type (クエリパラメータ) | 書籍オブジェクトの配列 |
+| /api/book | GET | URLで指定された書籍を取得 | url (クエリパラメータ) | 書籍オブジェクト |
+| /api/books/search | GET | 書籍検索 | query, type (クエリパラメータ) | 書籍オブジェクトの配列 |
 | /api/books/weekly | GET | 今週のおすすめ本を取得 | なし | 書籍オブジェクト |
-| /api/books/similar | GET | 類似書籍を取得 | bookUrl（クエリパラメータ） | 書籍オブジェクトの配列 |
-| /api/books/search | GET | 書籍検索 | query（クエリパラメータ） | 書籍オブジェクトの配列 |
-| /api/stats/distribution | GET | ジャンル等の分布統計を取得 | なし | 統計データ |
+| /api/books/recommend-by-genre | GET | ジャンル別推薦書籍を取得 | type, genreType, genreValue (クエリパラメータ) | 書籍オブジェクト |
+| /api/books/similar | GET | 類似書籍を取得 | url, type, limit (クエリパラメータ) | 書籍オブジェクトの配列 |
+| /api/stats/publishers | GET | 出版社別分布統計を取得 | type (クエリパラメータ) | 統計データ |
+| /api/stats/authors | GET | 著者別分布統計を取得 | type (クエリパラメータ) | 統計データ |
+| /api/stats/years | GET | 出版年別分布統計を取得 | type (クエリパラメータ) | 統計データ |
+| /api/stats/libraries | GET | 図書館所蔵状況の分布を取得 | type (クエリパラメータ) | 統計データ |
 
 ## フロントエンド設計
 
@@ -89,9 +125,9 @@ interface Book {
 - Layout: ページレイアウト（ヘッダー、フッター、ナビゲーション）
 - BookCard: 書籍情報表示カード
 - WeeklyRecommendation: 週間おすすめ本コンポーネント
-- SimilarBooksSection: 類似書籍表示セクション
+- SimilarBooks: 類似書籍表示セクション
 - BookSearch: 書籍検索フォーム
-- ReadingTrendChart: 読書傾向グラフ
+- StatsPage: 読書傾向可視化ページ
 
 ## バックエンド設計
 
@@ -101,10 +137,17 @@ backend/
 ├── src/
 │   ├── index.ts            # エントリーポイント
 │   ├── config/             # 設定
+│   │   └── database.ts     # データベース接続設定
 │   ├── controllers/        # APIコントローラー
+│   │   ├── bookController.ts
+│   │   ├── similarityController.ts
+│   │   └── statisticsController.ts
 │   ├── models/             # データモデル
+│   │   └── Book.ts
 │   ├── routes/             # APIルート定義
+│   │   └── api.ts
 │   ├── services/           # ビジネスロジック
+│   │   ├── bookService.ts
 │   │   ├── recommendationService.ts
 │   │   ├── similarityService.ts
 │   │   └── statisticsService.ts
@@ -113,17 +156,41 @@ backend/
 └── tsconfig.json
 ```
 
+### サービス層設計
+
+#### BookService
+- 書籍の基本操作機能を提供
+- データベースからの書籍取得とフィルタリング
+- BookDBからBookへの変換処理
+
+#### RecommendationService
+- 推薦アルゴリズムを実装
+- 優先順位に基づく推薦（UTokyo > Sophia > その他）
+- ジャンル（著者/出版社）に基づく推薦
+
+#### SimilarityService
+- 書籍の類似度計算機能を提供
+- TF-IDFを使用した説明文ベースの類似度計算
+- タイトルと著者に基づくフォールバック検索機能
+
+#### StatisticsService
+- 読書傾向の集計・分析
+- 出版社別分布
+- 著者別分布
+- 出版年別分布
+- 図書館所蔵状況の分布
+
 ### 推薦アルゴリズム
 1. 優先順位に基づく推薦
    - UTokyoにある本を優先
    - 次にSophiaにある本
    - 最後にどちらにもない本
-   - ランダム性も考慮して毎週異なる本を推薦
+   - ランダム性も考慮して毎週異なる本を推薦（週番号を使用）
 
 2. 類似度計算（TF-IDF）
    - 書籍の説明文（description）を使用
-   - 形態素解析による日本語テキスト処理
-   - TF-IDFベクトルによる類似度スコア計算
+   - 重要単語の抽出と重み付け
+   - バックアップとして、タイトルと著者の一致度による類似度計算
 
 ## 実装計画
 
@@ -144,8 +211,10 @@ backend/
 3. APIとの連携実装
 
 ### フェーズ4: 可視化コンポーネント
-1. ジャンル分布グラフ実装
-2. 時系列変化グラフ実装
+1. 出版社別分布グラフ実装
+2. 著者別分布グラフ実装
+3. 出版年別分布グラフ実装
+4. 図書館所蔵状況グラフ実装
 
 ### フェーズ5: 統合テストと調整
 1. エンドツーエンドテスト
