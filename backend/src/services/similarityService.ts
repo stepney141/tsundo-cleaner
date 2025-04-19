@@ -1,11 +1,22 @@
 import { TfIdf } from 'natural';
-import { Book, BookType } from '../models/Book';
-import { getDatabase, query, closeDatabase } from '../config/database';
+import { Book, BookDB, BookType } from '../models/Book';
+import { getDatabase, query } from '../config/database';
 
 /**
  * 書籍の類似度を計算するサービス
  */
 export class SimilarityService {
+  /**
+   * DB形式の書籍データをアプリケーション形式に変換する
+   */
+  private convertToAppModel(dbBook: BookDB): Book {
+    return {
+      ...dbBook,
+      exist_in_Sophia: dbBook.exist_in_Sophia === 'Yes',
+      exist_in_UTokyo: dbBook.exist_in_UTokyo === 'Yes'
+    };
+  }
+
   /**
    * 指定された書籍に類似した書籍を取得
    * @param referenceBookUrl 類似書籍を検索する基準となる書籍のURL
@@ -19,10 +30,15 @@ export class SimilarityService {
   ): Promise<Book[]> {
     const db = getDatabase();
     try {
+      // SQLインジェクション防止のため、typeは許可リストで検証
+      if (type !== 'wish' && type !== 'stacked') {
+        throw new Error(`無効な書籍タイプ: ${type}`);
+      }
+
       // 基準となる書籍を取得
-      const referenceBooks = await query<Book>(
+      const referenceBooks = await query<BookDB>(
         db,
-        `SELECT * FROM ${type === 'wish' ? 'wish' : 'stacked'} WHERE bookmeter_url = ?`,
+        `SELECT * FROM ${type} WHERE bookmeter_url = ?`,
         [referenceBookUrl]
       );
 
@@ -30,14 +46,21 @@ export class SimilarityService {
         throw new Error('指定された書籍が見つかりませんでした');
       }
 
-      const referenceBook = referenceBooks[0];
+      const referenceDbBook = referenceBooks[0];
+      const referenceBook = this.convertToAppModel(referenceDbBook);
       
-      // 比較対象の書籍を取得（説明文があるもののみ）
-      const targetBooks = await query<Book>(
+      // データベース側でフィルタリングして比較対象の書籍を取得（説明文があるもののみ）
+      const targetDbBooks = await query<BookDB>(
         db,
-        `SELECT * FROM ${type} WHERE description IS NOT NULL AND description != '' AND bookmeter_url != ?`,
+        `SELECT * FROM ${type} 
+         WHERE description IS NOT NULL 
+         AND description != '' 
+         AND bookmeter_url != ?
+         LIMIT 100`, // パフォーマンス向上のため上限を設定
         [referenceBookUrl]
       );
+      
+      const targetBooks = targetDbBooks.map(book => this.convertToAppModel(book));
 
       // 説明文がない場合はタイトルと著者で検索
       if (!referenceBook.description || referenceBook.description.trim() === '') {
@@ -46,43 +69,50 @@ export class SimilarityService {
 
       // TF-IDFを使った類似度計算
       return this.findSimilarByDescription(referenceBook, targetBooks, limit);
-    } finally {
-      await closeDatabase(db);
+    } catch (err: any) {
+      console.error(`getSimilarBooks(${referenceBookUrl}, ${type})でエラーが発生しました:`, err.message);
+      throw err;
     }
   }
 
   /**
    * 説明文を使って類似書籍を見つける
+   * 一度に全ての文書のTF-IDFを計算し、効率化
    */
   private findSimilarByDescription(
     referenceBook: Book,
     targetBooks: Book[],
     limit: number
   ): Book[] {
+    // 説明文のない書籍をフィルタリング
+    const validTargetBooks = targetBooks.filter(book => 
+      book.description && book.description.trim() !== ''
+    );
+    
+    if (validTargetBooks.length === 0) {
+      return [];
+    }
+    
     const tfidf = new TfIdf();
 
-    // 基準となる書籍の説明文をTF-IDFに追加
+    // まず全ての説明文をTF-IDFに追加（基準書籍を最初に）
     tfidf.addDocument(referenceBook.description || '');
-
-    // 比較対象の書籍をTF-IDFに追加
-    targetBooks.forEach((book, index) => {
-      if (book.description) {
-        tfidf.addDocument(book.description);
-      }
+    validTargetBooks.forEach(book => {
+      tfidf.addDocument(book.description || '');
     });
 
-    // 類似度スコアを計算（1番目の文書に対する類似度）
-    const similarityScores = targetBooks.map((book, index) => {
-      // 各書籍の類似度スコアを計算
+    // 類似度スコアの計算をバッチ処理で行う
+    const terms = this.extractKeyTerms(referenceBook.description || '');
+    const similarityScores = validTargetBooks.map((book, index) => {
+      const docIndex = index + 1; // +1は基準書籍がインデックス0だから
+      
+      // 重要な単語のみを使って類似度を計算し、計算量を削減
       let score = 0;
-      if (book.description) {
-        // TF-IDFの文書インデックスは0からなので、比較対象は1から始まる
-        tfidf.tfidfs(referenceBook.description || '', (i, measure) => {
-          if (i === index + 1) { // +1 は基準書籍がインデックス0だから
-            score = measure;
-          }
-        });
-      }
+      terms.forEach(term => {
+        const similarity = tfidf.tfidf(term, docIndex);
+        score += similarity;
+      });
+      
       return { book, score };
     });
 
@@ -90,7 +120,22 @@ export class SimilarityService {
     return similarityScores
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map((item) => item.book);
+      .map(item => item.book);
+  }
+
+  /**
+   * 文章から重要な単語を抽出する
+   */
+  private extractKeyTerms(text: string, maxTerms: number = 20): string[] {
+    // 単語に分割して、短すぎる単語や一般的すぎる単語を除外
+    const words = text.toLowerCase()
+      .replace(/[^\w\s]/g, '') // 記号を除去
+      .split(/\s+/)
+      .filter(word => word.length > 2) // 3文字以上の単語のみ
+      .filter(word => !['the', 'and', 'for', 'with', 'this', 'that'].includes(word));
+    
+    // 重複を除去して最大maxTerms件返す
+    return [...new Set(words)].slice(0, maxTerms);
   }
 
   /**
@@ -102,7 +147,7 @@ export class SimilarityService {
     limit: number
   ): Book[] {
     // 簡易的な類似度計算（単語の一致度）
-    const similarityScores = targetBooks.map((book) => {
+    const similarityScores = targetBooks.map(book => {
       let score = 0;
       
       // タイトルの単語一致を計算
@@ -112,7 +157,7 @@ export class SimilarityService {
       const targetTitleWords = targetTitle.split(/\s+/);
       
       // タイトルの単語が一致するごとにスコア加算
-      refTitleWords.forEach((word) => {
+      refTitleWords.forEach(word => {
         if (targetTitleWords.includes(word)) {
           score += 3; // タイトル一致は重み付け
         }
@@ -135,6 +180,6 @@ export class SimilarityService {
     return similarityScores
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map((item) => item.book);
+      .map(item => item.book);
   }
 }

@@ -11,10 +11,13 @@ const similarityController = new SimilarityController();
 const statisticsController = new StatisticsController();
 
 // 書籍関連のルート
-router.get('/books/weekly', bookController.getWeeklyRecommendation);
 router.get('/books', bookController.getAllBooks);
 router.get('/books/search', bookController.searchBooks);
 router.get('/book', bookController.getBookByUrl);
+
+// 推薦関連のルート
+router.get('/books/weekly', bookController.getWeeklyRecommendation);
+router.get('/books/recommend-by-genre', bookController.getRecommendationByGenre);
 
 // 類似書籍関連のルート
 router.get('/books/similar', similarityController.getSimilarBooks);

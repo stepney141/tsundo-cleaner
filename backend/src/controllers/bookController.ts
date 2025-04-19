@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { BookService } from '../services/bookService';
+import { RecommendationService } from '../services/recommendationService';
 import { BookType } from '../models/Book';
 
 /**
@@ -7,9 +8,11 @@ import { BookType } from '../models/Book';
  */
 export class BookController {
   private bookService: BookService;
+  private recommendationService: RecommendationService;
 
   constructor() {
     this.bookService = new BookService();
+    this.recommendationService = new RecommendationService();
   }
 
   /**
@@ -17,11 +20,46 @@ export class BookController {
    */
   getWeeklyRecommendation = async (req: Request, res: Response): Promise<void> => {
     try {
-      const book = await this.bookService.getWeeklyRecommendation();
+      const book = await this.recommendationService.getWeeklyRecommendation();
       res.json(book);
-    } catch (error) {
-      console.error('週間おすすめ本の取得エラー:', error);
+    } catch (error: any) {
+      console.error('週間おすすめ本の取得エラー:', error.message);
       res.status(500).json({ error: '週間おすすめ本の取得に失敗しました' });
+    }
+  };
+
+  /**
+   * ジャンル別のおすすめ本を取得
+   */
+  getRecommendationByGenre = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { type = 'wish', genreType, genreValue } = req.query;
+      
+      if (!genreType || !genreValue) {
+        res.status(400).json({ error: 'ジャンルタイプとジャンル値が必要です' });
+        return;
+      }
+      
+      if (genreType !== 'author' && genreType !== 'publisher') {
+        res.status(400).json({ error: 'ジャンルタイプは author または publisher である必要があります' });
+        return;
+      }
+      
+      const book = await this.recommendationService.getRecommendationByGenre(
+        type as BookType,
+        genreType,
+        genreValue as string
+      );
+      
+      if (!book) {
+        res.status(404).json({ error: '指定されたジャンルの本が見つかりませんでした' });
+        return;
+      }
+      
+      res.json(book);
+    } catch (error: any) {
+      console.error('ジャンル別おすすめ本の取得エラー:', error.message);
+      res.status(500).json({ error: 'ジャンル別おすすめ本の取得に失敗しました' });
     }
   };
 

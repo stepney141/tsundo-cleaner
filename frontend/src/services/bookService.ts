@@ -5,11 +5,27 @@ import { Book, BookType } from '../types/Book';
  * 書籍関連のAPIサービス
  */
 export const bookService = {
+  // 推薦関連の機能
+
   /**
    * 今週のおすすめ本を取得
    */
   getWeeklyRecommendation: async (): Promise<Book> => {
     const response = await apiClient.get<Book>('/books/weekly');
+    return response.data;
+  },
+
+  /**
+   * ジャンル（著者/出版社）に基づくおすすめ本を取得
+   */
+  getRecommendationByGenre: async (
+    genreType: 'author' | 'publisher',
+    genreValue: string,
+    type: BookType = 'wish'
+  ): Promise<Book> => {
+    const response = await apiClient.get<Book>('/books/recommend-by-genre', {
+      params: { genreType, genreValue, type },
+    });
     return response.data;
   },
 

@@ -1,5 +1,5 @@
-import { Book, BookType } from '../models/Book';
-import { getDatabase, query, closeDatabase } from '../config/database';
+import { BookType } from '../models/Book';
+import { getDatabase, query } from '../config/database';
 
 /**
  * 読書統計を計算するサービス
@@ -11,6 +11,11 @@ export class StatisticsService {
   async getPublisherDistribution(type: BookType = 'wish'): Promise<Array<{ publisher: string; count: number }>> {
     const db = getDatabase();
     try {
+      // SQLインジェクション防止のため、typeは許可リストで検証
+      if (type !== 'wish' && type !== 'stacked') {
+        throw new Error(`無効な書籍タイプ: ${type}`);
+      }
+      
       const result = await query<{ publisher: string; count: number }>(
         db,
         `SELECT publisher, COUNT(*) as count 
@@ -20,8 +25,9 @@ export class StatisticsService {
          ORDER BY count DESC`
       );
       return result;
-    } finally {
-      await closeDatabase(db);
+    } catch (err: any) {
+      console.error(`getPublisherDistribution(${type})でエラーが発生しました:`, err.message);
+      throw err;
     }
   }
 
@@ -31,6 +37,11 @@ export class StatisticsService {
   async getAuthorDistribution(type: BookType = 'wish'): Promise<Array<{ author: string; count: number }>> {
     const db = getDatabase();
     try {
+      // SQLインジェクション防止のため、typeは許可リストで検証
+      if (type !== 'wish' && type !== 'stacked') {
+        throw new Error(`無効な書籍タイプ: ${type}`);
+      }
+      
       const result = await query<{ author: string; count: number }>(
         db,
         `SELECT author, COUNT(*) as count 
@@ -41,8 +52,9 @@ export class StatisticsService {
          LIMIT 20`
       );
       return result;
-    } finally {
-      await closeDatabase(db);
+    } catch (err: any) {
+      console.error(`getAuthorDistribution(${type})でエラーが発生しました:`, err.message);
+      throw err;
     }
   }
 
@@ -52,6 +64,11 @@ export class StatisticsService {
   async getYearDistribution(type: BookType = 'wish'): Promise<Array<{ year: string; count: number }>> {
     const db = getDatabase();
     try {
+      // SQLインジェクション防止のため、typeは許可リストで検証
+      if (type !== 'wish' && type !== 'stacked') {
+        throw new Error(`無効な書籍タイプ: ${type}`);
+      }
+      
       // published_date列から年を抽出して集計
       // フォーマットが異なる可能性があるため、複数のパターンに対応
       const result = await query<{ year: string; count: number }>(
@@ -69,8 +86,9 @@ export class StatisticsService {
          ORDER BY year DESC`
       );
       return result;
-    } finally {
-      await closeDatabase(db);
+    } catch (err: any) {
+      console.error(`getYearDistribution(${type})でエラーが発生しました:`, err.message);
+      throw err;
     }
   }
 
@@ -80,35 +98,44 @@ export class StatisticsService {
   async getLibraryDistribution(type: BookType = 'wish'): Promise<Array<{ library: string; count: number }>> {
     const db = getDatabase();
     try {
-      // UTokyo, Sophia, Bothの3カテゴリに分ける
-      const inUTokyo = await query<{ count: number }>(
+      // SQLインジェクション防止のため、typeは許可リストで検証
+      if (type !== 'wish' && type !== 'stacked') {
+        throw new Error(`無効な書籍タイプ: ${type}`);
+      }
+      
+      // 一度のクエリで全ての情報を取得するように最適化
+      const distribution = await query<{ category: string; count: number }>(
         db,
-        `SELECT COUNT(*) as count FROM ${type} WHERE exist_in_UTokyo = 'Yes' AND exist_in_Sophia = 'No'`
+        `SELECT 
+          CASE 
+            WHEN exist_in_UTokyo = 'Yes' AND exist_in_Sophia = 'No' THEN 'UTokyo'
+            WHEN exist_in_Sophia = 'Yes' AND exist_in_UTokyo = 'No' THEN 'Sophia'
+            WHEN exist_in_UTokyo = 'Yes' AND exist_in_Sophia = 'Yes' THEN 'Both'
+            ELSE 'None'
+          END as category,
+          COUNT(*) as count
+        FROM ${type}
+        GROUP BY category
+        ORDER BY count DESC`
       );
       
-      const inSophia = await query<{ count: number }>(
-        db,
-        `SELECT COUNT(*) as count FROM ${type} WHERE exist_in_Sophia = 'Yes' AND exist_in_UTokyo = 'No'`
-      );
+      // 結果を標準フォーマットに変換
+      const result: Array<{ library: string; count: number }> = [];
+      const categories = ['UTokyo', 'Sophia', 'Both', 'None'];
       
-      const inBoth = await query<{ count: number }>(
-        db,
-        `SELECT COUNT(*) as count FROM ${type} WHERE exist_in_UTokyo = 'Yes' AND exist_in_Sophia = 'Yes'`
-      );
+      // 全カテゴリを結果に含める（0件のものも含む）
+      categories.forEach(category => {
+        const found = distribution.find(item => item.category === category);
+        result.push({
+          library: category,
+          count: found ? found.count : 0
+        });
+      });
       
-      const inNone = await query<{ count: number }>(
-        db,
-        `SELECT COUNT(*) as count FROM ${type} WHERE exist_in_UTokyo = 'No' AND exist_in_Sophia = 'No'`
-      );
-      
-      return [
-        { library: 'UTokyo', count: inUTokyo[0].count },
-        { library: 'Sophia', count: inSophia[0].count },
-        { library: 'Both', count: inBoth[0].count },
-        { library: 'None', count: inNone[0].count }
-      ];
-    } finally {
-      await closeDatabase(db);
+      return result;
+    } catch (err: any) {
+      console.error(`getLibraryDistribution(${type})でエラーが発生しました:`, err.message);
+      throw err;
     }
   }
 }
