@@ -3,12 +3,15 @@ import sqlite3 from 'sqlite3';
 import * as fs from 'fs';
 import { dirname } from 'path';
 import { DatabaseError } from '../utils/errorHandler';
+import { FirebaseService, createFirebaseService } from '../services/firebaseService';
 
 /**
  * データベース設定インターフェース
  */
 export interface DatabaseConfig {
   path: string;
+  autoSync?: boolean;          // Firebase自動同期の有効/無効
+  syncInterval?: number;       // 自動同期の間隔（ミリ秒）
 }
 
 /**
@@ -18,13 +21,41 @@ export interface DatabaseConfig {
 export class Database {
   private readonly config: DatabaseConfig;
   private db: sqlite3.Database | null = null;
+  private firebaseService: FirebaseService | null = null;
+  private syncIntervalId: NodeJS.Timeout | null = null;
 
   /**
    * コンストラクタ - 設定を受け取る
    */
   constructor(config: DatabaseConfig) {
-    this.config = config;
+    this.config = {
+      autoSync: process.env.DB_AUTO_SYNC === 'true',
+      syncInterval: parseInt(process.env.DB_SYNC_INTERVAL || '86400000', 10), // デフォルト24時間
+      ...config
+    };
+
+    // Firebaseサービスの初期化（条件付き）
+    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_STORAGE_BUCKET) {
+      try {
+        this.firebaseService = createFirebaseService();
+        console.log('Firebaseサービスが初期化されました');
+      } catch (err: any) {
+        console.error('Firebaseサービスの初期化に失敗しました:', err.message);
+        this.firebaseService = null;
+      }
+    }
+
     this.ensureDatabaseDirectory();
+    
+    // 初期同期の実行
+    this.syncDatabaseFromFirebase().catch(err => {
+      console.error('初期データベース同期エラー:', err.message);
+    });
+    
+    // 自動同期の設定
+    if (this.config.autoSync && this.config.syncInterval && this.firebaseService) {
+      this.setupAutoSync();
+    }
   }
 
   /**
@@ -44,8 +75,77 @@ export class Database {
     // データベースの存在をチェック
     if (!fs.existsSync(this.config.path)) {
       console.warn(`警告: 指定されたデータベースファイル ${this.config.path} が見つかりません。`);
-      console.warn('環境変数 SQLITE_DB_PATH を設定して正しいパスを指定するか、データベースファイルを作成してください。');
+      
+      if (this.firebaseService) {
+        console.log('Firebaseからデータベースファイルを取得しようとしています...');
+      } else {
+        console.warn('環境変数 SQLITE_DB_PATH を設定して正しいパスを指定するか、データベースファイルを作成してください。');
+      }
     }
+  }
+  
+  /**
+   * Firebase Storageからデータベースを同期
+   */
+  public async syncDatabaseFromFirebase(): Promise<boolean> {
+    if (!this.firebaseService) {
+      return false;
+    }
+    
+    try {
+      // 更新が必要かチェック
+      const needsUpdate = await this.firebaseService.shouldUpdateDatabase(this.config.path);
+      
+      if (needsUpdate) {
+        console.log('データベースの更新が必要です。Firebaseからダウンロードを開始します...');
+        
+        // 既存の接続があれば閉じる
+        if (this.db) {
+          await this.close();
+        }
+        
+        // ダウンロード実行
+        await this.firebaseService.downloadDatabase(this.config.path);
+        console.log(`データベースを更新しました: ${this.config.path}`);
+        
+        // 再接続（必要な場合）
+        if (this.db) {
+          this.connect();
+        }
+        
+        return true;
+      } else {
+        console.log('データベースは最新の状態です');
+        return false;
+      }
+    } catch (err: any) {
+      console.error('データベース同期エラー:', err.message);
+      // エラー時はローカルファイルを使用する
+      console.log('ローカルのデータベースファイルを使用します');
+      return false;
+    }
+  }
+  
+  /**
+   * 自動同期タイマーのセットアップ
+   */
+  private setupAutoSync(): void {
+    if (this.syncIntervalId) {
+      clearInterval(this.syncIntervalId);
+    }
+    
+    if (!this.config.syncInterval) return;
+    
+    this.syncIntervalId = setInterval(async () => {
+      try {
+        console.log('データベース自動同期を開始します...');
+        await this.syncDatabaseFromFirebase();
+      } catch (err: any) {
+        console.error('自動同期エラー:', err.message);
+      }
+    }, this.config.syncInterval);
+    
+    console.log(`自動同期が ${this.config.syncInterval / 1000 / 60} 分ごとに設定されました`);
   }
 
   /**
