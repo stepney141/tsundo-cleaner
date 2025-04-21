@@ -1,14 +1,10 @@
 import express, { Router } from 'express';
-import { BookController } from '../controllers/bookController';
-import { SimilarityController } from '../controllers/similarityController';
-import { StatisticsController } from '../controllers/statisticsController';
+import * as bookController from '../controllers/bookController';
+import * as similarityController from '../controllers/similarityController';
+import * as statisticsController from '../controllers/statisticsController';
+import { errorHandler, notFoundHandler } from '../utils/errorHandler';
 
 const router: Router = express.Router();
-
-// コントローラーのインスタンス化
-const bookController = new BookController();
-const similarityController = new SimilarityController();
-const statisticsController = new StatisticsController();
 
 // 書籍関連のルート
 router.get('/books', bookController.getAllBooks);

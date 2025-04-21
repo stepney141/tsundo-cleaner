@@ -43,10 +43,17 @@ export const bookService = {
    * キーワードで書籍を検索
    */
   searchBooks: async (query: string, type: BookType = 'wish'): Promise<Book[]> => {
-    const response = await apiClient.get<Book[]>('/books/search', {
-      params: { query, type },
-    });
-    return response.data;
+    console.log('検索リクエスト送信:', { query, type });
+    try {
+      const response = await apiClient.get<Book[]>('/books/search', {
+        params: { query, type },
+      });
+      console.log('検索結果受信:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('検索エラー:', error);
+      throw error;
+    }
   },
 
   /**

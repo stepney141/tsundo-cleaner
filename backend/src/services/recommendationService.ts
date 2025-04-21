@@ -1,114 +1,114 @@
-import { Book, BookDB, BookType } from '../models/Book';
-import { getDatabase, query } from '../config/database';
+import { db } from '../config/database';
+import { Book, BookType } from '../../../shared/types/Book';
+import { ValidationError, NotFoundError, validateBookType } from '../utils/errorHandler';
+import { convertToAppModel } from './bookService';
 
 /**
- * 書籍推薦機能を提供するサービス
+ * データベースモデル（DBに格納されている形式）
  */
-export class RecommendationService {
-  /**
-   * DB形式の書籍データをアプリケーション形式に変換する
-   */
-  private convertToAppModel(dbBook: BookDB): Book {
-    return {
-      ...dbBook,
-      exist_in_Sophia: dbBook.exist_in_Sophia === 'Yes',
-      exist_in_UTokyo: dbBook.exist_in_UTokyo === 'Yes'
-    };
-  }
+interface BookDB {
+  bookmeter_url: string;
+  isbn_or_asin: string;
+  book_title: string;
+  author: string;
+  publisher: string;
+  published_date: string;
+  exist_in_Sophia: string;       // 'Yes'/'No'
+  exist_in_UTokyo: string;       // 'Yes'/'No'
+  sophia_opac?: string;
+  utokyo_opac?: string;
+  sophia_mathlib_opac?: string;
+  description?: string;
+}
 
-  /**
-   * 週間おすすめ本を取得
-   * UTokyoにある本を優先順位で取得
-   * 「UTokyoにある本」「Sophiaにある本」「どちらにもない本」の優先順位
-   */
-  async getWeeklyRecommendation(): Promise<Book> {
-    const db = getDatabase();
-    try {
-      // ランダム性を持たせるために、現在の週番号を使用
-      const now = new Date();
-      const weekNumber = Math.floor((now.getTime() / (7 * 24 * 60 * 60 * 1000)));
-      
-      // クエリを実行: UTokyoにある本 → Sophiaにある本 → どちらにもない本の優先順位
-      let books = await query<BookDB>(
-        db,
+/**
+ * 週間おすすめ本を取得
+ * UTokyoにある本を優先順位で取得
+ * 「UTokyoにある本」「Sophiaにある本」「どちらにもない本」の優先順位
+ */
+export const getWeeklyRecommendation = async (): Promise<Book> => {
+  try {
+    // ランダム性を持たせるために、現在の週番号を使用
+    const now = new Date();
+    const weekNumber = Math.floor((now.getTime() / (7 * 24 * 60 * 60 * 1000)));
+    
+    // クエリを実行: UTokyoにある本 → Sophiaにある本 → どちらにもない本の優先順位
+    let books = await db.query<BookDB>(
+      `SELECT * FROM wish 
+       WHERE exist_in_UTokyo = 'Yes'
+       ORDER BY book_title`
+    );
+    
+    if (books.length === 0) {
+      books = await db.query<BookDB>(
         `SELECT * FROM wish 
-         WHERE exist_in_UTokyo = 'Yes'
+         WHERE exist_in_Sophia = 'Yes'
          ORDER BY book_title`
       );
-      
-      if (books.length === 0) {
-        books = await query<BookDB>(
-          db,
-          `SELECT * FROM wish 
-           WHERE exist_in_Sophia = 'Yes'
-           ORDER BY book_title`
-        );
-      }
-      
-      if (books.length === 0) {
-        books = await query<BookDB>(
-          db,
-          `SELECT * FROM wish 
-           ORDER BY book_title`
-        );
-      }
-      
-      // 本がない場合はエラー
-      if (books.length === 0) {
-        throw new Error('推薦する本が見つかりませんでした');
-      }
-      
-      // 週番号を使ってランダムに1冊選択
-      const randomIndex = weekNumber % books.length;
-      
-      // DB形式からアプリケーション形式に変換
-      return this.convertToAppModel(books[randomIndex]);
-    } catch (err: any) {
-      console.error('getWeeklyRecommendationでエラーが発生しました:', err.message);
-      throw err;
     }
-  }
-
-  /**
-   * ジャンル（著者/出版社）に基づく推薦
-   * 特定の著者や出版社の本をランダムに推薦
-   */
-  async getRecommendationByGenre(
-    type: BookType = 'wish',
-    genreType: 'author' | 'publisher',
-    genreValue: string
-  ): Promise<Book | null> {
-    const db = getDatabase();
-    try {
-      // SQLインジェクション防止のため、typeは許可リストで検証
-      if (type !== 'wish' && type !== 'stacked') {
-        throw new Error(`無効な書籍タイプ: ${type}`);
-      }
-
-      // genreTypeも検証
-      if (genreType !== 'author' && genreType !== 'publisher') {
-        throw new Error(`無効なジャンルタイプ: ${genreType}`);
-      }
-      
-      // クエリを実行
-      const books = await query<BookDB>(
-        db,
-        `SELECT * FROM ${type} 
-         WHERE ${genreType} = ?
-         ORDER BY RANDOM()
-         LIMIT 1`,
-        [genreValue]
+    
+    if (books.length === 0) {
+      books = await db.query<BookDB>(
+        `SELECT * FROM wish 
+         ORDER BY book_title`
       );
-      
-      if (books.length === 0) {
-        return null;
-      }
-      
-      // DB形式からアプリケーション形式に変換
-      return this.convertToAppModel(books[0]);
-    } catch (err: any) {
-      console.error(`getRecommendationByGenre(${type}, ${genreType}, ${genreValue})でエラーが発生しました:`, err.message);
-      throw err;
     }
+    
+    // 本がない場合はエラー
+    if (books.length === 0) {
+      throw new NotFoundError('推薦する本が見つかりませんでした');
+    }
+    
+    // 週番号を使ってランダムに1冊選択
+    const randomIndex = weekNumber % books.length;
+    
+    // DB形式からアプリケーション形式に変換
+    return convertToAppModel(books[randomIndex]);
+  } catch (err) {
+    console.error('getWeeklyRecommendationでエラーが発生しました:', err);
+    throw err;
   }
-}
+};
+
+/**
+ * ジャンル（著者/出版社）に基づく推薦
+ * 特定の著者や出版社の本をランダムに推薦
+ */
+export const getRecommendationByGenre = async (
+  type: BookType = 'wish',
+  genreType: 'author' | 'publisher',
+  genreValue: string
+): Promise<Book> => {
+  // 書籍タイプのバリデーション
+  validateBookType(type);
+
+  // genreTypeも検証
+  if (genreType !== 'author' && genreType !== 'publisher') {
+    throw new ValidationError(`無効なジャンルタイプ: ${genreType}`);
+  }
+  
+  if (!genreValue) {
+    throw new ValidationError('ジャンル値は必須です');
+  }
+  
+  try {
+    // クエリを実行
+    const books = await db.query<BookDB>(
+      `SELECT * FROM ${type} 
+       WHERE ${genreType} = ?
+       ORDER BY RANDOM()
+       LIMIT 1`,
+      [genreValue]
+    );
+    
+    if (books.length === 0) {
+      throw new NotFoundError(`${genreType}が "${genreValue}" の本が見つかりませんでした`);
+    }
+    
+    // DB形式からアプリケーション形式に変換
+    return convertToAppModel(books[0]);
+  } catch (err) {
+    console.error(`getRecommendationByGenre(${type}, ${genreType}, ${genreValue})でエラーが発生しました:`, err);
+    throw err;
+  }
+};
