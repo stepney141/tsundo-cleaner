@@ -1,8 +1,9 @@
-import * as admin from 'firebase-admin';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseError } from '../utils/errorHandler';
+import { initializeApp } from 'firebase/app';
+import { getStorage, ref, getDownloadURL } from 'firebase/storage';
 
 /**
  * Firebase設定インターフェース
@@ -11,8 +12,10 @@ export interface FirebaseConfig {
   projectId: string;
   storageBucket: string;
   databasePath: string;
-  credentialsPath?: string;
-  credentialsJson?: admin.ServiceAccount;
+  apiKey: string;            // Firebase APIキー（必須）
+  authDomain: string;        // Firebase認証ドメイン（必須）
+  messagingSenderId?: string; // Firebase メッセージ送信者ID
+  appId?: string;             // Firebase アプリID
 }
 
 /**
@@ -20,8 +23,8 @@ export interface FirebaseConfig {
  * ファイルのダウンロードなどの機能を提供
  */
 export class FirebaseService {
-  private storage!: admin.storage.Storage;
-  private bucket!: any; // firebase-adminの型定義の問題を回避
+  private app: any;
+  private storage: any;
   private config: FirebaseConfig;
   private initialized: boolean = false;
 
@@ -38,52 +41,27 @@ export class FirebaseService {
    */
   private initializeFirebase(): void {
     try {
-      // すでに初期化されている場合は何もしない
-      if (admin.apps.length > 0) {
-        const app = admin.apps[0];
-        if (app) {
-          this.storage = admin.storage();
-          this.bucket = this.storage.bucket(this.config.storageBucket);
-          this.initialized = true;
-          return;
-        }
+      // 必須パラメータのチェック
+      if (!this.config.apiKey || !this.config.authDomain || !this.config.projectId || !this.config.storageBucket) {
+        throw new Error('Firebase設定が不完全です。apiKey, authDomain, projectId, storageBucketは必須です。');
       }
 
-      // 認証情報の設定
-      let credential: admin.credential.Credential;
-      
-      if (this.config.credentialsJson) {
-        // 直接JSONオブジェクトから認証情報を作成
-        credential = admin.credential.cert(this.config.credentialsJson);
-      } else if (this.config.credentialsPath) {
-        // ファイルから認証情報を読み込む
-        try {
-          const serviceAccount = JSON.parse(
-            fs.readFileSync(this.config.credentialsPath, 'utf8')
-          );
-          credential = admin.credential.cert(serviceAccount);
-        } catch (err: any) {
-          console.error(`Firebase認証情報の読み込みエラー: ${err.message}`);
-          throw new DatabaseError(`Firebase認証情報の読み込みに失敗しました: ${err.message}`);
-        }
-      } else {
-        // 環境変数またはデフォルト認証情報を使用
-        credential = admin.credential.applicationDefault();
-      }
-
-      // Firebaseアプリケーションの初期化
-      admin.initializeApp({
-        credential,
-        storageBucket: this.config.storageBucket,
+      // Firebaseクライアントアプリケーションの初期化
+      this.app = initializeApp({
+        apiKey: this.config.apiKey,
+        authDomain: this.config.authDomain,
         projectId: this.config.projectId,
+        storageBucket: this.config.storageBucket,
+        messagingSenderId: this.config.messagingSenderId,
+        appId: this.config.appId
       });
-
-      this.storage = admin.storage();
-      this.bucket = this.storage.bucket(this.config.storageBucket);
+      
+      this.storage = getStorage(this.app);
       this.initialized = true;
       console.log('Firebase Storageに接続しました');
     } catch (err: any) {
       console.error(`Firebase初期化エラー: ${err.message}`);
+      console.error('詳細: https://firebase.google.com/docs/web/setup');
       // 初期化失敗時は標識を設定
       this.initialized = false;
       throw new DatabaseError(`Firebaseの初期化に失敗しました: ${err.message}`);
@@ -91,21 +69,24 @@ export class FirebaseService {
   }
 
   /**
-   * Firebase Storageからメタデータを取得
+   * Firebase Storageからファイルのメタデータを取得する方法は
+   * クライアントSDKでは直接サポートされていないため、
+   * 代わりにファイルの存在確認とダウンロードURLの有効性をチェックします
    */
-  public async getFileMetadata(): Promise<any | null> {
+  public async checkFileExists(): Promise<boolean> {
     if (!this.initialized) {
       console.warn('Firebase Storageが初期化されていません');
-      return null;
+      return false;
     }
 
     try {
-      const file = this.bucket.file(this.config.databasePath);
-      const [metadata] = await file.getMetadata();
-      return metadata;
+      const fileRef = ref(this.storage, this.config.databasePath);
+      // ダウンロードURLを取得してファイルの存在を確認
+      await getDownloadURL(fileRef);
+      return true;
     } catch (err: any) {
-      console.error(`Firebaseメタデータ取得エラー: ${err.message}`);
-      return null;
+      console.error(`Firebaseファイル存在確認エラー: ${err.message}`);
+      return false;
     }
   }
 
@@ -125,12 +106,9 @@ export class FirebaseService {
         fs.mkdirSync(dbDir, { recursive: true });
       }
 
-      // 署名付きURLの取得
-      const file = this.bucket.file(this.config.databasePath);
-      const [signedUrl] = await file.getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 15 * 60 * 1000, // 15分間有効
-      });
+      // ダウンロードURLの取得
+      const fileRef = ref(this.storage, this.config.databasePath);
+      const downloadURL = await getDownloadURL(fileRef);
 
       // 一時ファイル名を生成
       const tempFilePath = `${localDbPath}.downloading`;
@@ -138,7 +116,7 @@ export class FirebaseService {
       // ストリームでファイルをダウンロード
       const response = await axios({
         method: 'GET',
-        url: signedUrl,
+        url: downloadURL,
         responseType: 'stream',
       });
 
@@ -177,6 +155,9 @@ export class FirebaseService {
 
   /**
    * ローカルのデータベースが更新が必要かどうかを判断
+   * クライアントSDKではメタデータの更新時間を直接取得できないため、
+   * ファイルの存在チェックとローカルファイルのタイムスタンプを比較して判断
+   * 
    * @param localDbPath ローカルデータベースのパス
    * @returns 更新が必要な場合はtrue
    */
@@ -194,22 +175,23 @@ export class FirebaseService {
         return true;
       }
 
-      // Firebaseのメタデータを取得
-      const metadata = await this.getFileMetadata();
-      if (!metadata) {
-        console.warn('Firebaseにファイルが存在しないか、メタデータが取得できません');
+      // Firebaseにファイルが存在するか確認
+      const fileExists = await this.checkFileExists();
+      if (!fileExists) {
+        console.warn('Firebaseにファイルが存在しません');
         return false;
       }
 
-      // ローカルファイルの最終更新日時を取得
+      // クライアントSDKではFirebaseファイルの最終更新時間を直接取得できないため、
+      // 一定期間ごとに更新するようにする（例：24時間ごと）
       const localStats = fs.statSync(localDbPath);
       const localUpdatedTime = localStats.mtime.getTime();
-
-      // Firebaseファイルの最終更新日時を取得
-      const firebaseUpdatedTime = new Date(metadata.updated).getTime();
-
-      // 最終更新日時を比較
-      return firebaseUpdatedTime > localUpdatedTime;
+      const currentTime = Date.now();
+      
+      // 24時間（86400000ミリ秒）以上経過している場合は更新する
+      // ここは環境変数などで設定可能にしてもよい
+      const updateInterval = parseInt(process.env.DB_SYNC_INTERVAL || '86400000');
+      return (currentTime - localUpdatedTime) > updateInterval;
     } catch (err: any) {
       console.error(`データベース更新チェックエラー: ${err.message}`);
       // エラーの場合は安全のため更新なしとする
@@ -229,11 +211,24 @@ export class FirebaseService {
  * デフォルトのFirebase設定
  */
 export const getDefaultFirebaseConfig = (): FirebaseConfig => {
+  // すべての必須項目を環境変数から取得
+  const apiKey = process.env.FIREBASE_API_KEY;
+  const authDomain = process.env.FIREBASE_AUTH_DOMAIN;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+  
+  if (!apiKey || !authDomain || !projectId || !storageBucket) {
+    console.warn('Firebase設定が不完全です。.envファイルを確認してください。');
+  }
+  
   return {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
+    apiKey: apiKey || '',
+    authDomain: authDomain || '',
+    projectId: projectId || '',
+    storageBucket: storageBucket || '',
     databasePath: process.env.FIREBASE_DATABASE_PATH || 'books.sqlite',
-    credentialsPath: process.env.FIREBASE_CREDENTIALS_PATH,
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.FIREBASE_APP_ID,
   };
 };
 
