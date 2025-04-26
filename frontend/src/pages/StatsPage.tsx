@@ -117,7 +117,7 @@ const StatsPage: React.FC = () => {
                     fill="#8884d8"
                     label={({ library, percent }) => `${library} ${(percent * 100).toFixed(0)}%`}
                   >
-                    {libraries.map((entry, index) => (
+                    {libraries.map((_, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
