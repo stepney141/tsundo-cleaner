@@ -23,6 +23,8 @@ export class Database {
   private db: sqlite3.Database | null = null;
   private firebaseService: FirebaseService | null = null;
   private syncIntervalId: NodeJS.Timeout | null = null;
+  private isSyncing: boolean = false; // 同期中フラグを追加
+  private queryQueue: { resolve: (value: any) => void, reject: (reason?: any) => void, sql: string, params: any[] }[] = []; // クエリ待機キュー
 
   /**
    * コンストラクタ - 設定を受け取る
@@ -91,38 +93,69 @@ export class Database {
     if (!this.firebaseService) {
       return false;
     }
-    
+
+    if (this.isSyncing) {
+      console.log('現在同期処理中のため、今回の同期はスキップします。');
+      return false;
+    }
+
+    this.isSyncing = true;
+    console.log('データベース同期処理を開始します...');
+    const tempDbPath = this.config.path + '.tmp'; // 一時ファイルパス
+
     try {
-      // 更新が必要かチェック
       const needsUpdate = await this.firebaseService.shouldUpdateDatabase(this.config.path);
-      
+
       if (needsUpdate) {
-        console.log('データベースの更新が必要です。Firebaseからダウンロードを開始します...');
-        
-        // 既存の接続があれば閉じる
-        if (this.db) {
-          await this.close();
+        console.log('データベースの更新が必要です。Firebaseから一時ファイルへダウンロードを開始します...');
+
+        // 一時ファイルへダウンロード
+        await this.firebaseService.downloadDatabase(tempDbPath);
+        console.log(`一時ファイルへのダウンロードが完了しました: ${tempDbPath}`);
+
+        // 既存の接続を閉じる
+        await this.close(); // 接続を閉じてからファイルを置き換える
+
+        // ファイルをアトミックに置き換え
+        try {
+          fs.renameSync(tempDbPath, this.config.path);
+          console.log(`データベースファイルを更新しました: ${this.config.path}`);
+        } catch (renameErr: any) {
+          console.error(`データベースファイルのリネームに失敗しました: ${renameErr.message}`);
+          // リネーム失敗時は一時ファイルを削除
+          if (fs.existsSync(tempDbPath)) {
+            fs.unlinkSync(tempDbPath);
+          }
+          throw renameErr; // エラーを再スローして同期失敗とする
         }
-        
-        // ダウンロード実行
-        await this.firebaseService.downloadDatabase(this.config.path);
-        console.log(`データベースを更新しました: ${this.config.path}`);
-        
-        // 再接続（必要な場合）
-        if (this.db) {
-          this.connect();
-        }
-        
-        return true;
+
+        console.log('データベース同期が正常に完了しました。');
+        return true; // 更新があったことを示す
       } else {
-        console.log('データベースは最新の状態です');
-        return false;
+        console.log('データベースは最新の状態です。同期は不要です。');
+        return false; // 更新がなかったことを示す
       }
     } catch (err: any) {
       console.error('データベース同期エラー:', err.message);
       // エラー時はローカルファイルを使用する
-      console.log('ローカルのデータベースファイルを使用します');
-      return false;
+      console.log('ローカルのデータベースファイルを引き続き使用します');
+      return false; // 同期失敗
+    } finally {
+      this.isSyncing = false; // 同期フラグを解除
+      console.log('データベース同期処理を終了します。');
+      // 待機中のクエリを実行
+      this.processQueryQueue();
+    }
+  }
+
+  /**
+   * 待機中のクエリを実行するヘルパー関数
+   */
+  private processQueryQueue(): void {
+    console.log(`待機中のクエリを処理します。キューの長さ: ${this.queryQueue.length}`);
+    while (this.queryQueue.length > 0) {
+      const { resolve, reject, sql, params } = this.queryQueue.shift()!;
+      this.executeQuery(sql, params).then(resolve).catch(reject);
     }
   }
   
@@ -166,14 +199,56 @@ export class Database {
   }
 
   /**
-   * Promise化されたクエリ実行関数
+   * 実際のクエリ実行ロジック (Promise化)
+   */
+  private executeQuery<T>(sql: string, params: any[] = []): Promise<T[]> {
+    return new Promise((resolve, reject) => {
+      try {
+        const db = this.connect(); // 接続を試みる
+
+        // 開発環境でのみ、詳細なクエリログを出力
+        if (process.env.NODE_ENV === 'development') {
+          console.log('実行SQL:', sql, '| パラメータ:', params);
+        }
+
+        db.all(sql, params, (err, rows) => {
+          if (err) {
+            // エラーログは開発環境でのみ詳細に出力
+            if (process.env.NODE_ENV === 'development') {
+              console.error('クエリ実行エラー:', err.message, '| SQL:', sql);
+            } else {
+              console.error('クエリ実行エラー:', err.message);
+            }
+            reject(new DatabaseError(err.message));
+            return;
+          }
+          resolve(rows as T[]);
+        });
+      } catch (connectErr: any) {
+        // connect()内で同期的にエラーがスローされた場合 (例: DatabaseError)
+        console.error('データベース接続または準備中のエラー:', connectErr.message);
+        reject(connectErr);
+      }
+    });
+  }
+
+  /**
+   * クエリ実行関数 (同期中はキューイング)
    */
   public async query<T>(sql: string, params: any[] = []): Promise<T[]> {
-    const db = this.connect();
-    
-    return new Promise((resolve, reject) => {
-      // 開発環境でのみ、詳細なクエリログを出力
-      if (process.env.NODE_ENV === 'development') {
+    if (this.isSyncing) {
+      // 同期中の場合はキューに追加
+      console.log('同期中のためクエリをキューに追加します:', sql);
+      return new Promise((resolve, reject) => {
+        this.queryQueue.push({ resolve, reject, sql, params });
+      });
+    } else {
+      // 同期中でなければ直接実行
+      return this.executeQuery(sql, params);
+    }
+  }
+
+  /**
         console.log('実行SQL:', sql, '| パラメータ:', params);
       }
       
