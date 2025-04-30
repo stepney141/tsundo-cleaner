@@ -27,45 +27,83 @@ interface BookDB {
  * 「UTokyoにある本」「Sophiaにある本」「どちらにもない本」の優先順位
  */
 export const getWeeklyRecommendation = async (): Promise<Book> => {
+  console.log('[週間おすすめ] リクエスト受信');
   try {
     // ランダム性を持たせるために、現在の週番号を使用
     const now = new Date();
     const weekNumber = Math.floor((now.getTime() / (7 * 24 * 60 * 60 * 1000)));
+    console.log(`[週間おすすめ] 週番号計算: ${weekNumber}`);
     
+    console.log('[週間おすすめ] UTokyo本のクエリ実行開始');
     // クエリを実行: UTokyoにある本 → Sophiaにある本 → どちらにもない本の優先順位
-    let books = await db.query<BookDB>(
-      `SELECT * FROM wish 
-       WHERE exist_in_UTokyo = 'Yes'
-       ORDER BY book_title`
-    );
-    
-    if (books.length === 0) {
+    let books: BookDB[] = [];
+    try {
       books = await db.query<BookDB>(
         `SELECT * FROM wish 
-         WHERE exist_in_Sophia = 'Yes'
+         WHERE exist_in_UTokyo = 'Yes'
          ORDER BY book_title`
       );
+      console.log(`[週間おすすめ] UTokyo本のクエリ結果: ${books.length}件`);
+    } catch (queryErr) {
+      console.error('[週間おすすめ] UTokyo本のクエリ実行エラー:', queryErr);
+      // エラーを再スローせず、次のクエリを試みる
     }
     
     if (books.length === 0) {
-      books = await db.query<BookDB>(
-        `SELECT * FROM wish 
-         ORDER BY book_title`
-      );
+      console.log('[週間おすすめ] UTokyo本が見つからないため、Sophia本のクエリを実行');
+      try {
+        books = await db.query<BookDB>(
+          `SELECT * FROM wish 
+           WHERE exist_in_Sophia = 'Yes'
+           ORDER BY book_title`
+        );
+        console.log(`[週間おすすめ] Sophia本のクエリ結果: ${books.length}件`);
+      } catch (queryErr) {
+        console.error('[週間おすすめ] Sophia本のクエリ実行エラー:', queryErr);
+        // エラーを再スローせず、次のクエリを試みる
+      }
+    }
+    
+    if (books.length === 0) {
+      console.log('[週間おすすめ] Sophia本も見つからないため、全ての本のクエリを実行');
+      try {
+        books = await db.query<BookDB>(
+          `SELECT * FROM wish 
+           ORDER BY book_title`
+        );
+        console.log(`[週間おすすめ] 全ての本のクエリ結果: ${books.length}件`);
+      } catch (queryErr) {
+        console.error('[週間おすすめ] 全ての本のクエリ実行エラー:', queryErr);
+        throw queryErr; // 最後のクエリでもエラーの場合は再スロー
+      }
     }
     
     // 本がない場合はエラー
     if (books.length === 0) {
+      console.log('[週間おすすめ] 本が見つかりませんでした');
       throw new NotFoundError('推薦する本が見つかりませんでした');
     }
     
     // 週番号を使ってランダムに1冊選択
     const randomIndex = weekNumber % books.length;
+    console.log(`[週間おすすめ] 選択されたインデックス: ${randomIndex}/${books.length}`);
+    
+    const selectedBook = books[randomIndex];
+    console.log(`[週間おすすめ] 選択された本: ${selectedBook.book_title}`);
     
     // DB形式からアプリケーション形式に変換
-    return convertToAppModel(books[randomIndex]);
+    const result = convertToAppModel(selectedBook);
+    console.log('[週間おすすめ] 正常にレスポンスを返します');
+    return result;
   } catch (err) {
-    console.error('getWeeklyRecommendationでエラーが発生しました:', err);
+    console.error('[週間おすすめ] エラーが発生しました:', err);
+    if (err instanceof Error) {
+      console.error('[週間おすすめ] エラーの詳細:', { 
+        name: err.name, 
+        message: err.message, 
+        stack: err.stack 
+      });
+    }
     throw err;
   }
 };

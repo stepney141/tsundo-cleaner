@@ -74,7 +74,10 @@ export interface ErrorResponse {
   error: {
     code: string;      // エラーコード
     message: string;   // ユーザー向けメッセージ
+    requestId?: string; // リクエスト識別子（ログ追跡用）
     details?: any;     // 追加詳細情報（開発環境でのみ使用）
+    path?: string;     // リクエストパス（開発環境でのみ使用）
+    method?: string;   // HTTPメソッド（開発環境でのみ使用）
   };
   status: number;      // HTTPステータスコード
 }

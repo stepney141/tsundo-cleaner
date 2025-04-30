@@ -183,9 +183,26 @@ export class Database {
 
   /**
    * データベース接続を取得
+   * 接続状態を検証し、必要に応じて再接続する
    */
   public connect(): sqlite3.Database {
-    if (!this.db) {
+    // 接続状態を検証
+    if (this.db) {
+      try {
+        // 簡易的な接続テスト（軽量なSQLを実行してみる）
+        const stmt = this.db.prepare('SELECT 1');
+        stmt.finalize();
+        return this.db;
+      } catch (err) {
+        // 接続テスト失敗の場合はログ出力し、再接続を試みる
+        console.warn('既存のデータベース接続が無効です。再接続します。', err);
+        this.db = null;
+      }
+    }
+
+    // 新しい接続の作成（または再接続）
+    console.log(`データベースに接続しています: ${this.config.path}`);
+    try {
       this.db = new sqlite3.Database(this.config.path, (err) => {
         if (err) {
           const errorMessage = `SQLiteデータベース接続エラー: ${err.message}`;
@@ -194,24 +211,46 @@ export class Database {
         }
         console.log('SQLiteデータベースに接続しました:', this.config.path);
       });
+      return this.db;
+    } catch (err: any) {
+      console.error('データベース接続の作成中にエラーが発生しました:', err);
+      throw new DatabaseError(`データベース接続エラー: ${err.message}`);
     }
-    return this.db;
   }
 
   /**
    * 実際のクエリ実行ロジック (Promise化)
+   * タイムアウト機能とエラーハンドリングを強化
    */
-  private executeQuery<T>(sql: string, params: any[] = []): Promise<T[]> {
+  private executeQuery<T>(sql: string, params: any[] = [], timeout: number = 10000): Promise<T[]> {
     return new Promise((resolve, reject) => {
-      try {
-        const db = this.connect(); // 接続を試みる
+      // クエリのタイムアウト処理
+      let isTimedOut = false;
+      const timeoutId = setTimeout(() => {
+        isTimedOut = true;
+        reject(new DatabaseError(`クエリがタイムアウトしました (${timeout}ms): ${sql}`));
+      }, timeout);
 
-        // 開発環境でのみ、詳細なクエリログを出力
+      try {
+        // 接続を取得（状態検証付き）
+        const db = this.connect();
+
+        // ログ出力（開発環境のみ詳細に）
         if (process.env.NODE_ENV === 'development') {
           console.log('実行SQL:', sql, '| パラメータ:', params);
+        } else {
+          // 本番環境では簡易ログのみ
+          console.log('SQLクエリ実行:', sql.substring(0, 50) + (sql.length > 50 ? '...' : ''));
         }
 
+        // クエリ実行
         db.all(sql, params, (err, rows) => {
+          // タイムアウト処理をクリア
+          clearTimeout(timeoutId);
+          
+          // タイムアウト済みの場合は処理しない
+          if (isTimedOut) return;
+
           if (err) {
             // エラーログは開発環境でのみ詳細に出力
             if (process.env.NODE_ENV === 'development') {
@@ -219,53 +258,82 @@ export class Database {
             } else {
               console.error('クエリ実行エラー:', err.message);
             }
-            reject(new DatabaseError(err.message));
+            reject(new DatabaseError(err.message, { sql, params }));
             return;
           }
+          
+          // 結果を返す
           resolve(rows as T[]);
         });
       } catch (connectErr: any) {
-        // connect()内で同期的にエラーがスローされた場合 (例: DatabaseError)
+        // タイムアウト処理をクリア
+        clearTimeout(timeoutId);
+        
+        // タイムアウト済みの場合は処理しない
+        if (isTimedOut) return;
+        
+        // connect()内で同期的にエラーがスローされた場合
         console.error('データベース接続または準備中のエラー:', connectErr.message);
-        reject(connectErr);
+        reject(connectErr instanceof DatabaseError ? 
+          connectErr : 
+          new DatabaseError(`データベース接続エラー: ${connectErr.message}`, { sql, params }));
       }
     });
   }
 
   /**
    * クエリ実行関数 (同期中はキューイング)
+   * リトライメカニズムとエラーハンドリングを強化
    */
-  public async query<T>(sql: string, params: any[] = []): Promise<T[]> {
+  public async query<T>(sql: string, params: any[] = [], options: { 
+    timeout?: number;
+    retries?: number; 
+    retryDelay?: number;
+  } = {}): Promise<T[]> {
+    // オプションのデフォルト値
+    const timeout = options.timeout || 10000;  // デフォルト10秒
+    const maxRetries = options.retries || 3;   // デフォルト3回リトライ
+    const retryDelay = options.retryDelay || 500; // デフォルト500ms
+
+    // 同期中の場合はキューに追加
     if (this.isSyncing) {
-      // 同期中の場合はキューに追加
-      console.log('同期中のためクエリをキューに追加します:', sql);
+      console.log('同期中のためクエリをキューに追加します:', sql.substring(0, 50) + (sql.length > 50 ? '...' : ''));
       return new Promise((resolve, reject) => {
         this.queryQueue.push({ resolve, reject, sql, params });
       });
-    } else {
-      // 同期中でなければ直接実行
-      return this.executeQuery(sql, params);
     }
-  }
 
-  /**
-        console.log('実行SQL:', sql, '| パラメータ:', params);
-      }
-      
-      db.all(sql, params, (err, rows) => {
-        if (err) {
-          // エラーログは開発環境でのみ詳細に出力
-          if (process.env.NODE_ENV === 'development') {
-            console.error('クエリ実行エラー:', err.message, '| SQL:', sql);
-          } else {
-            console.error('クエリ実行エラー:', err.message);
-          }
-          reject(new DatabaseError(err.message));
-          return;
+    // リトライロジック
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // 最初の試行以外は少し待機
+        if (attempt > 0) {
+          console.log(`クエリ再試行 (${attempt}/${maxRetries}):`, sql.substring(0, 50) + (sql.length > 50 ? '...' : ''));
+          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
         }
-        resolve(rows as T[]);
-      });
-    });
+        
+        // クエリ実行
+        return await this.executeQuery<T>(sql, params, timeout);
+      } catch (err) {
+        lastError = err;
+        
+        // 特定のエラーは再試行する価値があるかを判断
+        const isRetryableError = err instanceof Error && 
+          (err.message.includes('database is locked') || 
+           err.message.includes('busy') ||
+           err.message.includes('no such table'));
+        
+        if (!isRetryableError || attempt === maxRetries) {
+          // 再試行可能でないエラー、または最後の試行だった場合
+          console.error(`クエリ失敗 (${attempt + 1}/${maxRetries + 1}):`, err);
+          throw err;
+        }
+      }
+    }
+    
+    // このコードは実行されないはずだが、TypeScriptの型チェックのために必要
+    throw lastError;
   }
 
   /**

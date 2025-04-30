@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 // .envファイルを読み込む（これは他のインポートより前に行う必要があります）
 dotenv.config();
 
-import express, { Express } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import apiRoutes from './routes/api';
 import { serverConfig, getServerUrl } from './config/server';
@@ -43,6 +43,20 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use(express.json()); // JSONボディパーサー
 
+// リクエストロギングミドルウェア
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const start = Date.now();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  
+  // レスポンス完了時のログ
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
+  });
+  
+  next();
+});
+
 // ルートの設定
 app.use('/api', apiRoutes);
 
@@ -67,11 +81,23 @@ app.get('/', (req, res) => {
 });
 
 // エラーハンドリングミドルウェアの設定
-// 404ハンドラ - 存在しないルートの対応
-app.use('*', (req, res) => notFoundHandler(req, res));
+// APIルートが存在するがリソースが見つからない場合のハンドリング
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  // APIルートは存在するが、具体的なリソースが見つからない場合の処理
+  // ルートハンドラでエラーがスローされると、次のミドルウェア（グローバルエラーハンドラ）に処理が移る
+  console.log(`[404] API not found: ${req.method} ${req.originalUrl}`);
+  notFoundHandler(req, res);
+});
+
+// 存在しないルートの対応
+app.use('*', (req: Request, res: Response) => {
+  console.log(`[404] Route not found: ${req.method} ${req.originalUrl}`);
+  notFoundHandler(req, res);
+});
 
 // グローバルエラーハンドラ - すべてのルートハンドラでスローされたエラーを捕捉
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error(`[ERROR] ${req.method} ${req.originalUrl}:`, err);
   errorHandler(err, req, res, next);
 });
 
