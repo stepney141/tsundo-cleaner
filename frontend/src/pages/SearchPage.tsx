@@ -69,23 +69,23 @@ const SearchPage: React.FC = () => {
             <TypeOption>
               <input
                 type="radio"
-                id="wish"
-                name="bookType"
-                checked={bookType === 'wish'}
-                onChange={() => setBookType('wish')}
-              />
-              <label htmlFor="wish">読みたい本</label>
-            </TypeOption>
-            
-            <TypeOption>
-              <input
-                type="radio"
                 id="stacked"
                 name="bookType"
                 checked={bookType === 'stacked'}
                 onChange={() => setBookType('stacked')}
               />
               <label htmlFor="stacked">積読本</label>
+            </TypeOption>
+
+            <TypeOption>
+              <input
+                type="radio"
+                id="wish"
+                name="bookType"
+                checked={bookType === 'wish'}
+                onChange={() => setBookType('wish')}
+              />
+              <label htmlFor="wish">読みたい本</label>
             </TypeOption>
           </TypeSelector>
           
