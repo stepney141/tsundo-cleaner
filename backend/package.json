@@ -31,6 +31,8 @@
     "firebase": "^11.6.0",
     "firebase-admin": "^13.2.0",
     "natural": "^8.0.1",
+    "node-cache": "^5.1.2",
+    "openai": "^4.96.2",
     "sqlite3": "^5.1.7"
   }
 }

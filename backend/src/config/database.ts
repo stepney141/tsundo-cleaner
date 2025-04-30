@@ -6,17 +6,26 @@ import { DatabaseError } from '../utils/errorHandler';
 import { FirebaseService, createFirebaseService } from '../services/firebaseService';
 
 /**
+ * データベース種別
+ */
+export enum DatabaseType {
+  BOOKS = 'books',
+  EMBEDDINGS = 'embeddings'
+}
+
+/**
  * データベース設定インターフェース
  */
 export interface DatabaseConfig {
   path: string;
-  autoSync?: boolean;          // Firebase自動同期の有効/無効
-  syncInterval?: number;       // 自動同期の間隔（ミリ秒）
+  type: DatabaseType;         // データベースの種類
+  autoSync?: boolean;         // Firebase自動同期の有効/無効
+  syncInterval?: number;      // 自動同期の間隔（ミリ秒）
+  syncWithFirebase?: boolean; // Firebaseとの同期を行うかどうか
 }
 
 /**
  * データベース接続を管理するクラス
- * 関数型アプローチに基づいた設計
  */
 export class Database {
   private readonly config: DatabaseConfig;
@@ -30,32 +39,36 @@ export class Database {
    * コンストラクタ - 設定を受け取る
    */
   constructor(config: DatabaseConfig) {
+    // デフォルト設定とマージ
     this.config = {
       autoSync: process.env.DB_AUTO_SYNC === 'true',
       syncInterval: parseInt(process.env.DB_SYNC_INTERVAL || '86400000', 10), // デフォルト24時間
+      syncWithFirebase: config.type === DatabaseType.BOOKS, // 書籍DBのみデフォルトでFirebase同期
       ...config
     };
 
-    // Firebaseサービスの初期化（条件付き）
-    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_STORAGE_BUCKET) {
+    // Firebaseとの同期が有効で、必要な環境変数が設定されている場合のみ初期化
+    if (this.config.syncWithFirebase && process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_STORAGE_BUCKET) {
       try {
         this.firebaseService = createFirebaseService();
-        console.log('Firebaseサービスが初期化されました');
+        console.log(`Firebaseサービスが初期化されました (${this.config.type})`);
       } catch (err: any) {
-        console.error('Firebaseサービスの初期化に失敗しました:', err.message);
+        console.error(`Firebaseサービスの初期化に失敗しました (${this.config.type}):`, err.message);
         this.firebaseService = null;
       }
     }
 
     this.ensureDatabaseDirectory();
     
-    // 初期同期の実行
-    this.syncDatabaseFromFirebase().catch(err => {
-      console.error('初期データベース同期エラー:', err.message);
-    });
+    // 初期同期の実行（同期が有効な場合のみ）
+    if (this.config.syncWithFirebase && this.firebaseService) {
+      this.syncDatabaseFromFirebase().catch(err => {
+        console.error(`初期データベース同期エラー (${this.config.type}):`, err.message);
+      });
+    }
     
-    // 自動同期の設定
-    if (this.config.autoSync && this.config.syncInterval && this.firebaseService) {
+    // 自動同期の設定（同期が有効な場合のみ）
+    if (this.config.syncWithFirebase && this.config.autoSync && this.config.syncInterval && this.firebaseService) {
       this.setupAutoSync();
     }
   }
@@ -399,19 +412,66 @@ export class Database {
   }
 }
 
-// デフォルトのデータベース設定
+// データベースパスと設定
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'books.sqlite');
-const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || DEFAULT_DB_PATH;
+const DEFAULT_CACHE_DB_PATH = path.join(process.cwd(), 'data', 'embeddings_cache.sqlite');
 
-// デフォルトのデータベースインスタンス
-// この部分はシングルトンパターンの代わりに、
-// 明示的なインスタンス作成を行いつつ、
-// アプリケーション全体で共有可能なインスタンスを提供
-export const createDatabase = (config?: Partial<DatabaseConfig>): Database => {
-  return new Database({
-    path: config?.path || SQLITE_DB_PATH
-  });
+const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || DEFAULT_DB_PATH;
+const EMBEDDING_CACHE_DB_PATH = process.env.EMBEDDING_CACHE_DB_PATH || DEFAULT_CACHE_DB_PATH;
+
+// データベース管理のシングルトン
+class DatabaseManager {
+  private static instance: DatabaseManager;
+  private databases: Map<DatabaseType, Database> = new Map();
+
+  private constructor() {
+    // 書籍データベース
+    this.databases.set(DatabaseType.BOOKS, new Database({
+      path: SQLITE_DB_PATH,
+      type: DatabaseType.BOOKS
+    }));
+
+    // 埋め込みキャッシュデータベース
+    this.databases.set(DatabaseType.EMBEDDINGS, new Database({
+      path: EMBEDDING_CACHE_DB_PATH,
+      type: DatabaseType.EMBEDDINGS,
+      syncWithFirebase: false // キャッシュはFirebaseと同期しない
+    }));
+  }
+
+  public static getInstance(): DatabaseManager {
+    if (!DatabaseManager.instance) {
+      DatabaseManager.instance = new DatabaseManager();
+    }
+    return DatabaseManager.instance;
+  }
+
+  public getDatabase(type: DatabaseType): Database {
+    const db = this.databases.get(type);
+    if (!db) {
+      throw new Error(`データベース ${type} が見つかりません`);
+    }
+    return db;
+  }
+
+  public async closeAll(): Promise<void> {
+    for (const [type, db] of this.databases.entries()) {
+      try {
+        await db.close();
+        console.log(`${type} データベース接続を閉じました`);
+      } catch (err) {
+        console.error(`${type} データベース接続のクローズに失敗しました:`, err);
+      }
+    }
+  }
+}
+
+// データベース取得用関数
+export const getDatabase = (type: DatabaseType): Database => {
+  return DatabaseManager.getInstance().getDatabase(type);
 };
 
-// アプリケーションのデフォルトインスタンス
-export const db = createDatabase();
+// すべてのデータベース接続を閉じる
+export const closeAllDatabases = async (): Promise<void> => {
+  await DatabaseManager.getInstance().closeAll();
+};

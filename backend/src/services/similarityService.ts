@@ -1,8 +1,10 @@
 import { TfIdf } from 'natural';
-import { db } from '../config/database';
+import { getDatabase, DatabaseType } from '../config/database';
 import { Book, BookType } from '../../../shared/types/Book';
 import { ValidationError, NotFoundError, validateBookType } from '../utils/errorHandler';
 import { convertToAppModel } from './bookService';
+import { getEmbedding, calculateCosineSimilarity } from './openaiService';
+import * as embeddingCache from './embeddingCache';
 
 /**
  * データベースモデル（DBに格納されている形式）
@@ -21,6 +23,40 @@ interface BookDB {
   sophia_mathlib_opac?: string;
   description?: string;
 }
+
+// 書籍データベース
+const bookDb = getDatabase(DatabaseType.BOOKS);
+
+/**
+ * 書籍の説明文から埋め込みベクトルを取得（キャッシュ対応）
+ * @param book 対象の書籍
+ * @returns 埋め込みベクトル
+ */
+export const getBookEmbedding = async (book: Book): Promise<number[]> => {
+  try {
+    // キャッシュから取得を試みる
+    const cachedEmbedding = await embeddingCache.getEmbedding(book.bookmeter_url);
+    if (cachedEmbedding) {
+      return cachedEmbedding;
+    }
+    
+    // 説明文がない場合はタイトルと著者を組み合わせて使用
+    const textForEmbedding = book.description && book.description.trim() !== '' 
+      ? book.description
+      : `${book.book_title} by ${book.author}`;
+    
+    // OpenAI API から埋め込みベクトルを取得
+    const embedding = await getEmbedding(textForEmbedding);
+    
+    // キャッシュに保存
+    await embeddingCache.saveEmbedding(book.bookmeter_url, embedding);
+    
+    return embedding;
+  } catch (error) {
+    console.error(`書籍 ${book.book_title} の埋め込みベクトル取得に失敗:`, error);
+    throw error;
+  }
+};
 
 /**
  * 指定された書籍に類似した書籍を取得
@@ -42,7 +78,7 @@ export const getSimilarBooks = async (
 
   try {
     // 基準となる書籍を取得
-    const referenceBooks = await db.query<BookDB>(
+    const referenceBooks = await bookDb.query<BookDB>(
       `SELECT * FROM ${type} WHERE bookmeter_url = ?`,
       [referenceBookUrl]
     );
@@ -54,25 +90,34 @@ export const getSimilarBooks = async (
     const referenceDbBook = referenceBooks[0];
     const referenceBook = convertToAppModel(referenceDbBook);
     
-    // データベース側でフィルタリングして比較対象の書籍を取得（説明文があるもののみ）
-    const targetDbBooks = await db.query<BookDB>(
+    // データベース側でフィルタリングして比較対象の書籍を取得
+    // 注：OpenAI Embeddingsを使用する場合は説明文がなくてもタイトルと著者を使用できるため、
+    // 説明文フィルタを削除
+    const targetDbBooks = await bookDb.query<BookDB>(
       `SELECT * FROM ${type} 
-       WHERE description IS NOT NULL 
-       AND description != '' 
-       AND bookmeter_url != ?
+       WHERE bookmeter_url != ?
        LIMIT 100`, // パフォーマンス向上のため上限を設定
       [referenceBookUrl]
     );
     
     const targetBooks = targetDbBooks.map(book => convertToAppModel(book));
 
-    // 説明文がない場合はタイトルと著者で検索
-    if (!referenceBook.description || referenceBook.description.trim() === '') {
-      return findSimilarByTitleAndAuthor(referenceBook, targetBooks, limit);
+    try {
+      // OpenAI Embeddingsを使用した類似度計算
+      return await findSimilarByEmbeddings(referenceBook, targetBooks, limit);
+    } catch (embeddingError) {
+      console.warn('OpenAI Embeddings APIによる類似度計算に失敗しました。TF-IDFにフォールバックします。', embeddingError);
+      
+      // 説明文がない場合はタイトルと著者で検索
+      if (!referenceBook.description || referenceBook.description.trim() === '') {
+        return findSimilarByTitleAndAuthor(referenceBook, targetBooks.filter(book => 
+          book.description && book.description.trim() !== ''), limit);
+      }
+      
+      // TF-IDFを使った類似度計算（フォールバック）
+      return findSimilarByDescription(referenceBook, targetBooks.filter(book => 
+        book.description && book.description.trim() !== ''), limit);
     }
-
-    // TF-IDFを使った類似度計算
-    return findSimilarByDescription(referenceBook, targetBooks, limit);
   } catch (err) {
     console.error(`getSimilarBooks(${referenceBookUrl}, ${type})でエラーが発生しました:`, err);
     throw err;
@@ -80,7 +125,49 @@ export const getSimilarBooks = async (
 };
 
 /**
- * 説明文を使って類似書籍を見つける
+ * OpenAI Embeddingsを使って類似書籍を見つける
+ */
+export const findSimilarByEmbeddings = async (
+  referenceBook: Book,
+  targetBooks: Book[],
+  limit: number
+): Promise<Book[]> => {
+  if (targetBooks.length === 0) {
+    return [];
+  }
+  
+  try {
+    // 基準書籍の埋め込みベクトルを取得
+    const referenceEmbedding = await getBookEmbedding(referenceBook);
+    
+    // 各書籍の埋め込みベクトルを取得し、類似度を計算
+    const similarityScores = await Promise.all(
+      targetBooks.map(async (book) => {
+        try {
+          const embedding = await getBookEmbedding(book);
+          const similarity = calculateCosineSimilarity(referenceEmbedding, embedding);
+          return { book, score: similarity };
+        } catch (error) {
+          console.error(`書籍 ${book.book_title} の類似度計算中にエラーが発生:`, error);
+          return { book, score: -1 }; // エラー時は最低スコア
+        }
+      })
+    );
+    
+    // スコアの高い順にソートして上位limit件を返す（エラーの場合は除外）
+    return similarityScores
+      .filter(item => item.score >= 0) // エラーとなった書籍を除外
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(item => item.book);
+  } catch (error) {
+    console.error('埋め込みベクトルによる類似度計算中にエラーが発生:', error);
+    throw error;
+  }
+};
+
+/**
+ * 説明文を使って類似書籍を見つける（TF-IDF）
  * 一度に全ての文書のTF-IDFを計算し、効率化
  */
 export const findSimilarByDescription = (

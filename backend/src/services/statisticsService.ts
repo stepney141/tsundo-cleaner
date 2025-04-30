@@ -1,6 +1,9 @@
-import { db } from '../config/database';
+import { getDatabase, DatabaseType } from '../config/database';
 import { BookType, PublisherDistribution, AuthorDistribution, YearDistribution, LibraryDistribution } from '../../../shared/types/Book';
 import { validateBookType } from '../utils/errorHandler';
+
+// 書籍データベース
+const bookDb = getDatabase(DatabaseType.BOOKS);
 
 /**
  * 出版社別の書籍数を取得
@@ -12,7 +15,7 @@ export const getPublisherDistribution = async (
   validateBookType(type);
   
   try {
-    const result = await db.query<PublisherDistribution>(
+    const result = await bookDb.query<PublisherDistribution>(
       `SELECT publisher, COUNT(*) as count 
        FROM ${type} 
        WHERE publisher IS NOT NULL AND publisher != '' 
@@ -36,7 +39,7 @@ export const getAuthorDistribution = async (
   validateBookType(type);
   
   try {
-    const result = await db.query<AuthorDistribution>(
+    const result = await bookDb.query<AuthorDistribution>(
       `SELECT author, COUNT(*) as count 
        FROM ${type} 
        WHERE author IS NOT NULL AND author != '' 
@@ -63,7 +66,7 @@ export const getYearDistribution = async (
   try {
     // published_date列から年を抽出して集計
     // フォーマットが異なる可能性があるため、複数のパターンに対応
-    const result = await db.query<YearDistribution>(
+    const result = await bookDb.query<YearDistribution>(
       `SELECT 
          CASE
            WHEN substr(published_date, 1, 4) GLOB '[0-9][0-9][0-9][0-9]' THEN substr(published_date, 1, 4)
@@ -94,7 +97,7 @@ export const getLibraryDistribution = async (
   
   try {
     // 一度のクエリで全ての情報を取得するように最適化
-    const distribution = await db.query<{ library: string; count: number }>(
+    const distribution = await bookDb.query<{ library: string; count: number }>(
       `SELECT 
         CASE 
           WHEN exist_in_UTokyo = 'Yes' AND exist_in_Sophia = 'No' THEN 'UTokyo'

@@ -1,7 +1,10 @@
-import { db } from '../config/database';
+import { getDatabase, DatabaseType } from '../config/database';
 import { Book, BookType } from '../../../shared/types/Book';
 import { ValidationError, NotFoundError, validateBookType } from '../utils/errorHandler';
 import { convertToAppModel } from './bookService';
+
+// 書籍データベース
+const bookDb = getDatabase(DatabaseType.BOOKS);
 
 /**
  * データベースモデル（DBに格納されている形式）
@@ -38,7 +41,7 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     // クエリを実行: UTokyoにある本 → Sophiaにある本 → どちらにもない本の優先順位
     let books: BookDB[] = [];
     try {
-      books = await db.query<BookDB>(
+      books = await bookDb.query<BookDB>(
         `SELECT * FROM wish 
          WHERE exist_in_UTokyo = 'Yes'
          ORDER BY book_title`
@@ -52,7 +55,7 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     if (books.length === 0) {
       console.log('[週間おすすめ] UTokyo本が見つからないため、Sophia本のクエリを実行');
       try {
-        books = await db.query<BookDB>(
+        books = await bookDb.query<BookDB>(
           `SELECT * FROM wish 
            WHERE exist_in_Sophia = 'Yes'
            ORDER BY book_title`
@@ -67,7 +70,7 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     if (books.length === 0) {
       console.log('[週間おすすめ] Sophia本も見つからないため、全ての本のクエリを実行');
       try {
-        books = await db.query<BookDB>(
+        books = await bookDb.query<BookDB>(
           `SELECT * FROM wish 
            ORDER BY book_title`
         );
@@ -131,7 +134,7 @@ export const getRecommendationByGenre = async (
   
   try {
     // クエリを実行
-    const books = await db.query<BookDB>(
+    const books = await bookDb.query<BookDB>(
       `SELECT * FROM ${type} 
        WHERE ${genreType} = ?
        ORDER BY RANDOM()

@@ -7,7 +7,8 @@ import cors from 'cors';
 import apiRoutes from './routes/api';
 import { serverConfig, getServerUrl } from './config/server';
 import { errorHandler, notFoundHandler } from './utils/errorHandler';
-import { db } from './config/database';
+import { closeAllDatabases } from './config/database';
+import { initEmbeddingCache } from './services/embeddingCache';
 
 // サーバー設定の取得
 const PORT = serverConfig.port;
@@ -102,9 +103,17 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // サーバー起動
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`サーバーがポート ${PORT} で起動しました`);
   console.log(`${getServerUrl()}/`);
+  
+  // 埋め込みベクトルキャッシュの初期化
+  try {
+    await initEmbeddingCache();
+    console.log('埋め込みベクトルキャッシュを初期化しました');
+  } catch (error) {
+    console.error('埋め込みベクトルキャッシュの初期化に失敗しました:', error);
+  }
 });
 
 // プロセス終了時の処理
@@ -115,9 +124,9 @@ const gracefulShutdown = async () => {
   server.close(async () => {
     console.log('HTTPサーバーを停止しました');
     
-    // データベース接続を閉じる
+    // すべてのデータベース接続を閉じる
     try {
-      await db.close();
+      await closeAllDatabases();
       console.log('全ての接続を正常に閉じました');
       process.exit(0);
     } catch (err) {

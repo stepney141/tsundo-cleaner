@@ -107,7 +107,7 @@ type BookType = 'wish' | 'stacked';
 | /api/books/search | GET | 書籍検索 | query, type (クエリパラメータ) | 書籍オブジェクトの配列 |
 | /api/books/weekly | GET | 今週のおすすめ本を取得 | なし | 書籍オブジェクト |
 | /api/books/recommend-by-genre | GET | ジャンル別推薦書籍を取得 | type, genreType, genreValue (クエリパラメータ) | 書籍オブジェクト |
-| /api/books/similar | GET | 類似書籍を取得 | url, type, limit (クエリパラメータ) | 書籍オブジェクトの配列 |
+| /api/books/similar | GET | 類似書籍を取得 | url, type, limit (クエリパラメータ) | 書籍オブジェクトの配列 (指定された書籍のベクトル表現を OpenAI Embeddings API で取得し、キャッシュされた他の書籍ベクトルとのコサイン類似度を計算して類似書籍を返します。) |
 | /api/stats/publishers | GET | 出版社別分布統計を取得 | type (クエリパラメータ) | 統計データ |
 | /api/stats/authors | GET | 著者別分布統計を取得 | type (クエリパラメータ) | 統計データ |
 | /api/stats/years | GET | 出版年別分布統計を取得 | type (クエリパラメータ) | 統計データ |
@@ -171,8 +171,9 @@ backend/
 
 #### SimilarityService
 - 書籍の類似度計算機能を提供
-- TF-IDFを使用した説明文ベースの類似度計算
-- タイトルと著者に基づくフォールバック検索機能
+- OpenAI Embeddings API (`text-embedding-ada-002` 等のモデル) を使用し、書籍のタイトルや説明文からベクトル表現（Embedding）を取得
+- 取得したベクトル間のコサイン類似度を計算し、類似度が高い書籍を特定
+- タイトルと著者に基づくフォールバック検索は、ベクトル検索が主となるため、優先度を下げます（または削除を検討）
 
 #### StatisticsService
 - 読書傾向の集計・分析
@@ -231,9 +232,10 @@ backend/
 # .env ファイル (または環境変数)
 PORT=3001             # サーバーのポート番号
 HOST=localhost        # サーバーのホスト名
+OPENAI_API_KEY=YOUR_OPENAI_API_KEY # OpenAI APIキー
 ```
 
-これらの設定は `backend/src/config/server.ts` で管理され、フォールバック値が設定されています。
+これらの設定は `backend/src/config/server.ts` または専用の設定ファイルで管理され、フォールバック値が設定されています。OpenAI APIキーは機密情報のため、`.env` ファイルや環境変数での管理を推奨します。
 
 ### フロントエンド環境変数
 フロントエンドのAPI接続設定は環境変数を通じて変更できます。
