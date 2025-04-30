@@ -96,8 +96,13 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     
     // DB形式からアプリケーション形式に変換
     const result = convertToAppModel(selectedBook);
+    // 書籍タイプを追加（週間おすすめは現在wishテーブルから取得しているため'wish'）
+    const resultWithType = {
+      ...result,
+      bookType: 'wish' as BookType
+    };
     console.log('[週間おすすめ] 正常にレスポンスを返します');
-    return result;
+    return resultWithType;
   } catch (err) {
     console.error('[週間おすすめ] エラーが発生しました:', err);
     if (err instanceof Error) {

@@ -46,7 +46,7 @@ const WeeklyRecommendation: React.FC = () => {
     <Container>
       <SectionTitle>今週の読書推薦</SectionTitle>
       <WeeklyBookContainer>
-        <BookCard book={book} />
+        <BookCard book={book} bookType={book.bookType || 'wish'} />
         <LibraryLinks>
           {book.sophia_opac && (
             <LibraryLink href={book.sophia_opac} target="_blank" rel="noopener noreferrer">

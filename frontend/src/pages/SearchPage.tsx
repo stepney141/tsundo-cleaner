@@ -103,7 +103,7 @@ const SearchPage: React.FC = () => {
               <SearchResultsList>
                 {searchResults.map((book) => (
                   <div key={book.bookmeter_url} onClick={() => handleBookSelect(book)}>
-                    <BookCard book={book} />
+                    <BookCard book={book} bookType={book.bookType || bookType} />
                   </div>
                 ))}
               </SearchResultsList>

@@ -1,16 +1,17 @@
 import React from 'react';
 import styled from 'styled-components';
-import { Book } from '../types/Book';
+import { Book, BookType } from '../types/Book';
 
 interface BookCardProps {
   book: Book;
   onClick?: () => void;
+  bookType?: BookType;
 }
 
 /**
  * 書籍情報を表示するカードコンポーネント
  */
-const BookCard: React.FC<BookCardProps> = ({ book, onClick }) => {
+const BookCard: React.FC<BookCardProps> = ({ book, onClick, bookType }) => {
   return (
     <CardContainer onClick={onClick}>
       <BookTitle>{book.book_title}</BookTitle>
@@ -22,6 +23,13 @@ const BookCard: React.FC<BookCardProps> = ({ book, onClick }) => {
       <LibraryStatus>
         {book.exist_in_UTokyo && <LibraryBadge color="#88CCFF">東大所蔵</LibraryBadge>}
         {book.exist_in_Sophia && <LibraryBadge color="#AADDAA">上智所蔵</LibraryBadge>}
+        {bookType && (
+          <BookTypeBadge 
+            color={bookType === 'stacked' ? '#9F22E2' : '#E25822'}
+          >
+            {bookType === 'stacked' ? '積読本' : '読みたい本'}
+          </BookTypeBadge>
+        )}
       </LibraryStatus>
       {book.description && book.description.length > 0 && (
         <Description>
@@ -94,6 +102,16 @@ const LibraryBadge = styled.span<{ color: string }>`
   font-size: 12px;
   background-color: ${(props) => props.color};
   color: #fff;
+`;
+
+const BookTypeBadge = styled.span<{ color: string }>`
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  background-color: ${(props) => props.color};
+  color: #fff;
+  font-weight: 500;
 `;
 
 const Description = styled.p`

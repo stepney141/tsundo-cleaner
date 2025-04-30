@@ -59,7 +59,11 @@ const SimilarBooks: React.FC<SimilarBooksProps> = ({ bookUrl, type = 'wish', lim
       <SectionTitle>この本に類似した本</SectionTitle>
       <BooksList>
         {books.map((book) => (
-          <BookCard key={book.bookmeter_url} book={book} />
+          <BookCard 
+            key={book.bookmeter_url} 
+            book={book} 
+            bookType={book.bookType || type} 
+          />
         ))}
       </BooksList>
     </Container>

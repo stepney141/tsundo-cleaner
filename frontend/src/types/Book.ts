@@ -34,6 +34,7 @@ export interface Book {
   utokyo_opac?: string;        // 東大OPACリンク
   sophia_mathlib_opac?: string; // 上智数学図書館OPACリンク
   description?: string;        // 書籍の説明
+  bookType?: BookType;         // 書籍タイプ（'stacked'または'wish'）
 }
 
 /**
