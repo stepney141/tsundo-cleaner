@@ -11,7 +11,7 @@ import Layout from '../components/Layout';
  */
 const SearchPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [bookType, setBookType] = useState<BookType>('wish');
+  const [bookType, setBookType] = useState<BookType>('stacked');
   const [searchResults, setSearchResults] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
