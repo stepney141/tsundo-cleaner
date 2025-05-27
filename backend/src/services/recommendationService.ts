@@ -25,9 +25,17 @@ interface BookDB {
 }
 
 /**
+ * 拡張されたBookDB型（テーブル情報付き）
+ */
+interface BookDBWithType extends BookDB {
+  bookType: BookType;
+}
+
+/**
  * 週間おすすめ本を取得
  * UTokyoにある本を優先順位で取得
  * 「UTokyoにある本」「Sophiaにある本」「どちらにもない本」の優先順位
+ * 積読本（stacked）と読みたい本（wish）の両方から選択
  */
 export const getWeeklyRecommendation = async (): Promise<Book> => {
   console.log('[週間おすすめ] リクエスト受信');
@@ -39,14 +47,29 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     
     console.log('[週間おすすめ] UTokyo本のクエリ実行開始');
     // クエリを実行: UTokyoにある本 → Sophiaにある本 → どちらにもない本の優先順位
-    let books: BookDB[] = [];
+    let books: BookDBWithType[] = [];
+    
     try {
-      books = await bookDb.query<BookDB>(
+      // wishテーブルからUTokyo本を取得
+      const wishBooksUtokyo = await bookDb.query<BookDB>(
         `SELECT * FROM wish 
          WHERE exist_in_UTokyo = 'Yes'
          ORDER BY book_title`
       );
-      console.log(`[週間おすすめ] UTokyo本のクエリ結果: ${books.length}件`);
+      // stackedテーブルからUTokyo本を取得
+      const stackedBooksUtokyo = await bookDb.query<BookDB>(
+        `SELECT * FROM stacked 
+         WHERE exist_in_UTokyo = 'Yes'
+         ORDER BY book_title`
+      );
+      
+      // 書籍タイプを追加してマージ
+      books = [
+        ...wishBooksUtokyo.map(book => ({ ...book, bookType: 'wish' as BookType })),
+        ...stackedBooksUtokyo.map(book => ({ ...book, bookType: 'stacked' as BookType }))
+      ];
+      
+      console.log(`[週間おすすめ] UTokyo本のクエリ結果: wish=${wishBooksUtokyo.length}件, stacked=${stackedBooksUtokyo.length}件, 合計=${books.length}件`);
     } catch (queryErr) {
       console.error('[週間おすすめ] UTokyo本のクエリ実行エラー:', queryErr);
       // エラーを再スローせず、次のクエリを試みる
@@ -55,12 +78,26 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     if (books.length === 0) {
       console.log('[週間おすすめ] UTokyo本が見つからないため、Sophia本のクエリを実行');
       try {
-        books = await bookDb.query<BookDB>(
+        // wishテーブルからSophia本を取得
+        const wishBooksSophia = await bookDb.query<BookDB>(
           `SELECT * FROM wish 
            WHERE exist_in_Sophia = 'Yes'
            ORDER BY book_title`
         );
-        console.log(`[週間おすすめ] Sophia本のクエリ結果: ${books.length}件`);
+        // stackedテーブルからSophia本を取得
+        const stackedBooksSophia = await bookDb.query<BookDB>(
+          `SELECT * FROM stacked 
+           WHERE exist_in_Sophia = 'Yes'
+           ORDER BY book_title`
+        );
+        
+        // 書籍タイプを追加してマージ
+        books = [
+          ...wishBooksSophia.map(book => ({ ...book, bookType: 'wish' as BookType })),
+          ...stackedBooksSophia.map(book => ({ ...book, bookType: 'stacked' as BookType }))
+        ];
+        
+        console.log(`[週間おすすめ] Sophia本のクエリ結果: wish=${wishBooksSophia.length}件, stacked=${stackedBooksSophia.length}件, 合計=${books.length}件`);
       } catch (queryErr) {
         console.error('[週間おすすめ] Sophia本のクエリ実行エラー:', queryErr);
         // エラーを再スローせず、次のクエリを試みる
@@ -70,11 +107,24 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     if (books.length === 0) {
       console.log('[週間おすすめ] Sophia本も見つからないため、全ての本のクエリを実行');
       try {
-        books = await bookDb.query<BookDB>(
+        // wishテーブルから全ての本を取得
+        const allWishBooks = await bookDb.query<BookDB>(
           `SELECT * FROM wish 
            ORDER BY book_title`
         );
-        console.log(`[週間おすすめ] 全ての本のクエリ結果: ${books.length}件`);
+        // stackedテーブルから全ての本を取得
+        const allStackedBooks = await bookDb.query<BookDB>(
+          `SELECT * FROM stacked 
+           ORDER BY book_title`
+        );
+        
+        // 書籍タイプを追加してマージ
+        books = [
+          ...allWishBooks.map(book => ({ ...book, bookType: 'wish' as BookType })),
+          ...allStackedBooks.map(book => ({ ...book, bookType: 'stacked' as BookType }))
+        ];
+        
+        console.log(`[週間おすすめ] 全ての本のクエリ結果: wish=${allWishBooks.length}件, stacked=${allStackedBooks.length}件, 合計=${books.length}件`);
       } catch (queryErr) {
         console.error('[週間おすすめ] 全ての本のクエリ実行エラー:', queryErr);
         throw queryErr; // 最後のクエリでもエラーの場合は再スロー
@@ -92,14 +142,14 @@ export const getWeeklyRecommendation = async (): Promise<Book> => {
     console.log(`[週間おすすめ] 選択されたインデックス: ${randomIndex}/${books.length}`);
     
     const selectedBook = books[randomIndex];
-    console.log(`[週間おすすめ] 選択された本: ${selectedBook.book_title}`);
+    console.log(`[週間おすすめ] 選択された本: ${selectedBook.book_title} (タイプ: ${selectedBook.bookType})`);
     
     // DB形式からアプリケーション形式に変換
     const result = convertToAppModel(selectedBook);
-    // 書籍タイプを追加（週間おすすめは現在wishテーブルから取得しているため'wish'）
+    // 書籍タイプを正確に設定
     const resultWithType = {
       ...result,
-      bookType: 'wish' as BookType
+      bookType: selectedBook.bookType
     };
     console.log('[週間おすすめ] 正常にレスポンスを返します');
     return resultWithType;

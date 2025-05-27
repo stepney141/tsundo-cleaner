@@ -44,7 +44,11 @@ const HomePage: React.FC = () => {
 
         {!loading && !error && weeklyBook && (
           <SimilarBooksSection>
-            <SimilarBooks bookUrl={weeklyBook.bookmeter_url} limit={5} />
+            <SimilarBooks 
+              bookUrl={weeklyBook.bookmeter_url} 
+              type={weeklyBook.bookType} 
+              limit={5} 
+            />
           </SimilarBooksSection>
         )}
       </PageContainer>
