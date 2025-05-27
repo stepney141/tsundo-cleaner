@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { Book, BookType } from '../types/Book';
 import { bookService } from '../services/bookService';
@@ -17,9 +17,8 @@ const SearchPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  // 実際の検索実行ロジック
+  const executeSearch = async () => {
     if (!searchQuery.trim()) {
       setError('検索語を入力してください');
       return;
@@ -44,6 +43,19 @@ const SearchPage: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executeSearch();
+  };
+
+  // bookTypeが変更されたときに自動的に再検索を実行
+  useEffect(() => {
+    // 検索クエリが存在し、検索結果も存在し、現在検索中でない場合のみ実行
+    if (searchQuery.trim() && searchResults.length > 0 && !loading) {
+      executeSearch();
+    }
+  }, [bookType]); // bookTypeの変更を監視
 
   const handleBookSelect = (book: Book) => {
     setSelectedBook(book);
